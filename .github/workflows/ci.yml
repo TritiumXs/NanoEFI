@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y ninja-build clang llvm
+
+      - name: Build SDK (debug)
+        run: |
+          cmake --preset native-debug
+          cmake --build --preset native-debug
+
+      - name: Build SDK (release)
+        run: |
+          cmake --preset native-release
+          cmake --build --preset native-release
+
+      - name: Build nano_cli
+        env:
+          NANOEFI_SDK_DIR: ${{ github.workspace }}
+        run: |
+          cmake -B Util/NanoCli/build -S Util/NanoCli \
+                -G Ninja -DCMAKE_C_COMPILER=clang
+          cmake --build Util/NanoCli/build

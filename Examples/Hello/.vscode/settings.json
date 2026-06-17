@@ -1,0 +1,8 @@
+{
+    "cmake.configureEnvironment": {
+        "NANOEFI_SDK_DIR": "E:\\NanoEFI"
+    },
+    "cmake.debugConfig": {
+        "args": ["E:\\NanoEFI\\examples\\hello\\build\\hello.nef"]
+    }
+}

@@ -1,0 +1,22 @@
+cmake_minimum_required(VERSION 3.20)
+project(sensor-logger C)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+if(NOT DEFINED NANOEFI_SDK_DIR)
+    if(DEFINED ENV{NANOEFI_SDK_DIR})
+        set(NANOEFI_SDK_DIR $ENV{NANOEFI_SDK_DIR})
+    else()
+        message(FATAL_ERROR "NANOEFI_SDK_DIR not set. Run: . scripts/setup_env.ps1")
+    endif()
+endif()
+
+add_subdirectory(${NANOEFI_SDK_DIR} ${CMAKE_BINARY_DIR}/sdk EXCLUDE_FROM_ALL)
+
+if(WIN32)
+    add_executable(sensor_logger SensorLogger.c MainWin32.c)
+    target_link_libraries(sensor_logger PRIVATE nanoEFI-lib nanoEFI-win32)
+else()
+    add_executable(sensor_logger SensorLogger.c MainLinux.c)
+    target_link_libraries(sensor_logger PRIVATE nanoEFI-lib nanoEFI-linux)
+endif()

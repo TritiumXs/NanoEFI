@@ -1,0 +1,152 @@
+/**
+ * @page ndih_format NanoEFI Driver Image Header (NDIH)
+ *
+ * @tableofcontents
+ *
+ * @section ndih_overview Overview
+ *
+ * Every `.nef` driver image begins with the 28-byte **NanoEFI Driver Image
+ * Header** (NDIH).  It encodes the minimum information the loader needs to
+ * validate, map, and launch a driver without any OS or filesystem support.
+ *
+ * The format is intentionally small: 28 bytes of header + code payload +
+ * 4 bytes of CRC32 trailer.  No dynamic sections, no relocation tables, no
+ * symbol names.  Position-independent code and a link-time-fixed entry offset
+ * replace all of that.
+ *
+ * @section ndih_binary Binary Layout
+ *
+ * All multi-byte fields are stored **little-endian**.  The struct is
+ * `__attribute__((packed))` — no padding bytes are ever inserted.
+ *
+ * | Offset | Size | Field          | Description |
+ * |--------|------|----------------|-------------|
+ * | 0x00   |  4   | Magic          | ASCII `"NEFI"` (0x4946454E LE) |
+ * | 0x04   |  2   | Version        | NDIH format version (currently `0x0001`) |
+ * | 0x06   |  1   | ArchId         | Target ISA — `NANO_EFI_ARCH_*` |
+ * | 0x07   |  1   | Flags          | `NANO_EFI_IMAGE_FLAG_*` bitmask |
+ * | 0x08   |  4   | EntryOffset    | Byte offset of entry point from image base |
+ * | 0x0C   |  4   | DataSize       | `.data` section size (bytes) |
+ * | 0x10   |  4   | BssSize        | `.bss` section size (bytes) |
+ * | 0x14   |  4   | MinSvcVersion  | Minimum `NanoEfiServiceTable.Version` |
+ * | 0x18   |  4   | ImageSize      | Total image size including 4-byte CRC32 trailer |
+ *
+ * @section ndih_fields Field Semantics
+ *
+ * @subsection ndih_magic Magic
+ * A simple sanity check.  `NefLoad` rejects any buffer whose first four bytes
+ * do not equal `"NEFI"`.  No endianness conversion is needed because the bytes
+ * are compared individually.
+ *
+ * @subsection ndih_version Version
+ * The NDIH format version, not the driver API version.  Currently `0x0001`.
+ * Future incompatible layout changes increment this value; the loader rejects
+ * images with an unknown version rather than mis-parsing them.
+ *
+ * @subsection ndih_archid ArchId
+ * Identifies the target instruction-set architecture:
+ *
+ * | Value  | Constant                 | ISA              |
+ * |--------|--------------------------|------------------|
+ * | `0x01` | `NANO_EFI_ARCH_ARMV7M`  | Cortex-M (ARMv7-M) |
+ * | `0x02` | `NANO_EFI_ARCH_RISCV32` | RV32I / RV32IMAC |
+ * | `0x10` | `NANO_EFI_ARCH_X86_64`  | x86-64 (dev/test) |
+ * | `0x11` | `NANO_EFI_ARCH_AARCH64` | AArch64 (dev/test) |
+ *
+ * The loader compares this against its own `NANO_EFI_ARCH_CURRENT` and refuses
+ * to execute a mismatched image.
+ *
+ * @subsection ndih_flags Flags
+ * Currently one flag is defined:
+ *
+ * - `NANO_EFI_IMAGE_FLAG_XIP` (`0x01`) — **Execute-in-Place**.  The `.text`
+ *   section lives in Flash; the loader does not copy it to RAM and calls the
+ *   entry point at the Flash address directly.  `DataSize` and `BssSize` still
+ *   describe the writable-section RAM footprint.
+ *
+ * @subsection ndih_entryoffset EntryOffset
+ * Byte distance from the start of the image (byte 0 of the NDIH) to the first
+ * instruction of the driver entry function.  The loader computes the runtime
+ * entry address as:
+ * @code
+ *   entry_fn = (NanoEfiDriverEntry)(image_base + header->EntryOffset);
+ * @endcode
+ * In signed mode, `EntryOffset` already accounts for the 96-byte signature
+ * block that follows the header.
+ *
+ * @subsection ndih_data_bss DataSize / BssSize
+ * When the driver is loaded into RAM (XIP flag clear), the loader:
+ * 1. Allocates `DataSize` bytes and copies the initialised data payload from
+ *    the image into it.
+ * 2. Allocates `BssSize` bytes and zero-fills them.
+ *
+ * On MCUs without a heap, the backend may supply a fixed static buffer via
+ * `QueryCapability(NANO_EFI_CAP_MALLOC, &v)`.  Drivers must check this before
+ * assuming dynamic allocation is available.
+ *
+ * @subsection ndih_minsvcversion MinSvcVersion
+ * Guards backward compatibility.  If the host runtime's
+ * `NanoEfiServiceTable.Version` is less than this value, `NefLoad` returns
+ * `EFI_UNSUPPORTED` and does not call the driver.  Set this to the lowest
+ * service-table version the driver was tested against.
+ *
+ * @subsection ndih_imagesize ImageSize
+ * The total byte count of the `.nef` file: header (28) + payload + CRC32 (4).
+ * `NefLoad` uses this to size the CRC32 computation — it hashes bytes
+ * `[0 .. ImageSize-5]` and compares the result against the last four bytes.
+ *
+ * @section ndih_crc32 CRC32 Trailer
+ *
+ * The four bytes immediately following the last payload byte are the CRC32
+ * of the entire image excluding those four bytes.  Parameters:
+ * - Polynomial: Ethernet / ISO-HDLC (0xEDB88320 reflected)
+ * - Initial value: `0xFFFFFFFF`
+ * - Input and output reflection: yes
+ * - Final XOR: `0xFFFFFFFF`
+ *
+ * `ndih_pack` appends this trailer automatically.  `NefLoad` verifies it
+ * before touching any field in the header.
+ *
+ * @section ndih_signed Signed-Mode Extension
+ *
+ * When `NefLoad` is called with `NanoEfiSecuritySigned`, it expects a 96-byte
+ * block between the header and the code section:
+ *
+ * | Offset from header end | Size | Content           |
+ * |------------------------|------|-------------------|
+ * | +0                     |  32  | Ed25519 public key |
+ * | +32                    |  64  | Ed25519 signature  |
+ *
+ * The signature covers bytes `[0 .. ImageSize-5]` (same range as CRC32).
+ * `EntryOffset` must be `28 + 96 = 124` or greater to skip over this block.
+ *
+ * @section ndih_lifecycle Lifecycle
+ *
+ * @code{.unparsed}
+ *   ┌─────────────┐   clang --target=...   ┌──────────┐
+ *   │  driver.c   │ ──────────────────────▶│ driver.elf│
+ *   └─────────────┘   -nostdlib -T drv.ld  └────┬─────┘
+ *                                               │ llvm-objcopy -O binary
+ *                                               ▼
+ *                                          ┌──────────┐
+ *                                          │ flat.bin │
+ *                                          └────┬─────┘
+ *                                               │ ndih_pack flat.bin out.nef
+ *                                               ▼
+ *                              ┌────────────────────────────┐
+ *                              │ [NDIH 28B][payload][CRC32] │  ← out.nef
+ *                              └────────────┬───────────────┘
+ *                                           │ NefLoad(buf, sz, &svc, ...)
+ *                                           ▼
+ *                              1. verify CRC32
+ *                              2. check Magic / Version / ArchId
+ *                              3. check MinSvcVersion ≤ host Version
+ *                              4. alloc + copy .data, alloc + zero .bss
+ *                              5. resolve entry = base + EntryOffset
+ *                              6. call Entry(Svc, Arg)
+ * @endcode
+ *
+ * @see NanoEfiImageHeader — the C struct definition in NefImage.h
+ * @see NefLoader.c        — NefLoad() implementation
+ * @see ndih_pack.c        — image packing tool
+ */

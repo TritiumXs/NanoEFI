@@ -1,0 +1,4 @@
+If:
+  PathMatch: Backends/Linux/.*
+CompileFlags:
+  Add: [-target, x86_64-unknown-linux-gnu, -isystem/usr/include, -I../../Include]

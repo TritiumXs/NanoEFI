@@ -1,0 +1,47 @@
+mainmenu "NanoEFI Configuration"
+
+# ──────────────────────────────────────────
+# Platform Backend
+# ──────────────────────────────────────────
+
+menu "Platform Backend"
+
+choice
+    prompt "Backend"
+    default NANOEFI_BACKEND_WIN32
+
+config NANOEFI_BACKEND_LINUX
+    bool "Linux (POSIX pthread)"
+
+config NANOEFI_BACKEND_WIN32
+    bool "Win32 (native API, no dependencies)"
+
+endchoice
+
+endmenu
+
+# ──────────────────────────────────────────
+# Build Options
+# ──────────────────────────────────────────
+
+menu "Build Options"
+
+choice
+    prompt "Build type"
+    default NANOEFI_BUILD_RELWITHDEBINFO
+
+config NANOEFI_BUILD_DEBUG
+    bool "Debug (-O0 -g3)"
+
+config NANOEFI_BUILD_RELWITHDEBINFO
+    bool "RelWithDebInfo (-O2 -g)"
+
+config NANOEFI_BUILD_RELEASE
+    bool "Release (-O2)"
+
+config NANOEFI_BUILD_MINSIZEREL
+    bool "MinSizeRel (-Os)"
+
+endchoice
+
+endmenu
